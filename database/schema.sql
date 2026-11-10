@@ -4,7 +4,17 @@
 --
 -- Target  : MySQL 8.x / MariaDB 10.4+
 -- Source  : derived from the original phpMyAdmin export of the `soktrapa` database
---           (tables, column types, primary keys, indexes and foreign keys unchanged).
+--           (tables, column types, primary keys and indexes unchanged).
+--
+-- Delete rules (changed from the original export, where every foreign key was
+-- ON DELETE CASCADE - see docs/database-design.md, "Delete safety"):
+--   RESTRICT : commande -> client, ligne_commande -> commande / produit,
+--              facture -> commande, paiement -> facture, retour -> facture
+--              A customer, order, product or invoice that is still referenced
+--              cannot be deleted, so business and financial records are never
+--              removed silently and reserved stock cannot be lost.
+--   CASCADE  : stocker -> produit / depot (pure association rows).
+-- Existing databases: apply database/migrations/001_restrict_deletes.sql.
 -- Usage   : mysql -u <user> -p < database/schema.sql
 --           then:  mysql -u <user> -p soktrapa < database/sample_data.sql
 --
@@ -98,7 +108,7 @@ CREATE TABLE `commande` (
   PRIMARY KEY (`id_commande`),
   KEY `id_client` (`id_client`),
   CONSTRAINT `commande_ibfk_1` FOREIGN KEY (`id_client`) REFERENCES `client` (`id_client`)
-    ON DELETE CASCADE ON UPDATE CASCADE
+    ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- -----------------------------------------------------------------------------
@@ -111,9 +121,9 @@ CREATE TABLE `ligne_commande` (
   PRIMARY KEY (`id_commande`, `id_produit`),
   KEY `id_produit` (`id_produit`),
   CONSTRAINT `ligne_commande_ibfk_1` FOREIGN KEY (`id_commande`) REFERENCES `commande` (`id_commande`)
-    ON DELETE CASCADE ON UPDATE CASCADE,
+    ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT `ligne_commande_ibfk_2` FOREIGN KEY (`id_produit`) REFERENCES `produit` (`id_produit`)
-    ON DELETE CASCADE ON UPDATE CASCADE
+    ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- -----------------------------------------------------------------------------
@@ -129,7 +139,7 @@ CREATE TABLE `facture` (
   PRIMARY KEY (`id_facture`),
   KEY `id_commande` (`id_commande`),
   CONSTRAINT `facture_ibfk_1` FOREIGN KEY (`id_commande`) REFERENCES `commande` (`id_commande`)
-    ON DELETE CASCADE ON UPDATE CASCADE
+    ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- -----------------------------------------------------------------------------
@@ -145,7 +155,7 @@ CREATE TABLE `paiement` (
   PRIMARY KEY (`id_paie`),
   KEY `id_facture` (`id_facture`),
   CONSTRAINT `paiement_ibfk_1` FOREIGN KEY (`id_facture`) REFERENCES `facture` (`id_facture`)
-    ON DELETE CASCADE ON UPDATE CASCADE
+    ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- -----------------------------------------------------------------------------
@@ -160,5 +170,5 @@ CREATE TABLE `retour` (
   PRIMARY KEY (`id_retour`),
   KEY `id_facture` (`id_facture`),
   CONSTRAINT `retour_ibfk_1` FOREIGN KEY (`id_facture`) REFERENCES `facture` (`id_facture`)
-    ON DELETE CASCADE ON UPDATE CASCADE
+    ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
