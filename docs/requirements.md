@@ -26,7 +26,7 @@ Legend — **✅ Implemented & tested** · **🟡 Partial** · **❌ Not impleme
 ### B. Customer management — `GestionClients`
 | Requirement | Status | Notes |
 |---|---|---|
-| Create, view, update, delete customers | ✅ | Confirmation dialog before deletion. |
+| Create, view, update, delete customers | ✅ | Confirmation dialog before deletion. A customer who has orders cannot be deleted (`ON DELETE RESTRICT`). |
 | Search | ✅ | By name, first name, ID, phone or type (`LIKE`, parameterised). |
 | Customer type, payment terms, credit limit | ✅ | Combo boxes (Entreprise/Grossiste/Détaillant; Comptant, 30/60/90 jours, Fin de mois); numeric validation of the credit limit. |
 | Credit limit enforcement on orders | ❌ | Stored and displayed only; not checked when ordering. |
@@ -35,11 +35,11 @@ Legend — **✅ Implemented & tested** · **🟡 Partial** · **❌ Not impleme
 ### C. Order management — `GestionCommandes`
 | Requirement | Status | Notes |
 |---|---|---|
-| Create / update / delete orders; search by ID | ✅ | Order date, expected delivery date, discount %, customer selection. |
+| Create / update / delete orders; search by ID | ✅ | Order date, expected delivery date, discount %, customer selection. Deleting an order restores the stock of all its lines; an invoiced order cannot be deleted. |
 | Order status (validate / cancel) | ✅ | Status `En attente`, `Confirmée`, `Annulée`. |
-| Order lines: product + quantity (add / modify / delete) | ✅ | Transactions (`setAutoCommit(false)`, commit/rollback). |
+| Order lines: product + quantity (add / modify / delete) | ✅ | One transaction per operation in `CommandeService`, with row locks; a refused operation changes nothing. |
 | Check stock before accepting a line | ✅ | Blocking when insufficient; alerts at low levels. |
-| Reserve / decrease stock | ✅ | Stock is decreased immediately when a line is added and restored when it is removed. |
+| Reserve / decrease stock | ✅ | Stock is decreased when a line is added and restored when the line or the order is removed. Setting the status to `Annulée` does not release stock (see [`improvement-audit.md`](improvement-audit.md)). |
 | Trigger a purchase when out of stock | ❌ | Only a warning message ("passer une commande d'approvisionnement"). Purchasing/suppliers are out of scope. |
 
 ### D. Inventory management — `GestionStock`
@@ -78,4 +78,4 @@ Legend — **✅ Implemented & tested** · **🟡 Partial** · **❌ Not impleme
 | Persistence | MySQL/MariaDB over JDBC; parameterised queries for all user input. |
 | Usability | French UI, consistent green theme, confirmation dialogs, validation messages. |
 | Security | See [`security-audit.md`](security-audit.md). |
-| Tests | Automated Swing/JDBC integration test (38 checks) — no unit-test framework. |
+| Tests | Automated Swing/JDBC integration test (59 checks, including 21 regression checks on order/stock consistency and delete safety) — no unit-test framework. |

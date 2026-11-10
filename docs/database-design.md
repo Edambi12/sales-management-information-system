@@ -1,13 +1,14 @@
 # Database design
 
-Source of truth: the MySQL/MariaDB export of the `soktrapa` database, reproduced
-without structural changes in [`database/schema.sql`](../database/schema.sql).
+Source of truth: [`database/schema.sql`](../database/schema.sql). Tables, columns, types,
+primary keys and indexes are those of the original MySQL/MariaDB export of the `soktrapa`
+database; only the `ON DELETE` rules of six foreign keys were changed (see *Delete safety*).
 
 ## 1. Overview
 
 * **Engine / charset:** InnoDB, `utf8mb4` / `utf8mb4_general_ci`.
 * **10 tables:** 8 business entities + 2 association tables.
-* **8 foreign keys**, all `ON DELETE CASCADE ON UPDATE CASCADE`.
+* **8 foreign keys**: 6 are `ON DELETE RESTRICT`, 2 (association table `stocker`) are `ON DELETE CASCADE`; all are `ON UPDATE CASCADE`.
 * Surrogate integer primary keys (`AUTO_INCREMENT`); the two association tables use
   composite primary keys.
 
@@ -211,25 +212,38 @@ class diagram image [`uml/24-class-diagram.png`](uml/24-class-diagram.png).
 | Invoice → Payments | `paiement.id_facture` | Partial / instalment payments; the UI shows the remaining balance per payment row. |
 | Invoice → Returns | `retour.id_facture` | Each return is attached to an invoice (i.e. to a sale). |
 
-### Cascade behaviour (important)
+### Delete safety
 
-All foreign keys use `ON DELETE CASCADE`. Deleting a **customer** therefore silently
-deletes their orders, order lines, invoices, payments and returns. Deleting an
-**invoice** deletes its payments and returns. This is how the original database was
-designed and it has been kept unchanged; for a production system `ON DELETE RESTRICT`
-(plus soft delete / archiving) would be safer — see *Future improvements* in the README.
+In the original export every foreign key was `ON DELETE CASCADE`: deleting a customer
+silently deleted their orders, order lines, invoices, payments and returns. The rules are now:
+
+| Foreign key | `ON DELETE` | Effect |
+|---|---|---|
+| `commande.id_client` → `client` | RESTRICT | a customer with orders cannot be deleted |
+| `ligne_commande.id_commande` → `commande` | RESTRICT | lines are removed by the application, which restores stock first |
+| `ligne_commande.id_produit` → `produit` | RESTRICT | a product used in orders cannot be deleted |
+| `facture.id_commande` → `commande` | RESTRICT | an invoiced order cannot be deleted |
+| `paiement.id_facture` → `facture` | RESTRICT | an invoice with payments cannot be deleted |
+| `retour.id_facture` → `facture` | RESTRICT | an invoice with returns cannot be deleted |
+| `stocker.id_produit` → `produit`, `stocker.id_depot` → `depot` | CASCADE | association rows follow their parents |
+
+Databases created before this change are upgraded with
+[`database/migrations/001_restrict_deletes.sql`](../database/migrations/001_restrict_deletes.sql).
+Risk analysis and remaining recommendations (soft delete for customers, invoice
+cancellation instead of deletion): [`improvement-audit.md`](improvement-audit.md).
 
 ## 5. Business rules implemented in Java (not in SQL)
 
 | Rule | Where |
 |---|---|
-| Stock check before adding an order line (blocking if insufficient, warning if remaining ≤ 1000 kg or < 50 %) | `GestionCommandes.controlerStock` |
-| Stock decreased when a line is added, restored when a line is deleted / adjusted when modified (same transaction) | `GestionCommandes.diminuerStock / restaurerStock` |
+| Stock check before adding or changing an order line (blocking if insufficient, warning if remaining ≤ 1000 kg or < 50 %) | `service.CommandeService` (`reserver`, `evaluer`) |
+| Stock decreased when a line is added, adjusted when it is modified, restored when the line **or the whole order** is deleted — always in the same transaction as the line change, with row locks | `service.CommandeService`, `dao.StockDao`, `dao.LigneCommandeDao` |
+| With several depots per product: taken from the depot with the most stock, returned to the product's first depot (one row updated each time) | `dao.StockDao` |
 | Invoice amount: `Σ(price × qty) × (1 − discount%)`, then **+ 7 % VAT** | `GestionPaiement.calculerFactureDetaillee` |
 | Only confirmed orders without an invoice can be invoiced | `GestionPaiement.chargerCommandesCombo` |
 | Remaining balance = invoice NET TTC − payment amount | `GestionPaiement.consulterPaiements` |
 | Inventory: physical count replaces the recorded quantity, the gap (surplus/shortage) is reported | `GestionStock.inventaireStock` |
-| Stock exit refused when quantity exceeds availability | `GestionStock.sortieStock` |
+| Stock exit refused when quantity exceeds availability (read and update in one transaction) | `GestionStock.sortieStock` |
 
 ## 6. Differences between the report and the actual database
 
@@ -246,5 +260,7 @@ designed and it has been kept unchanged; for a production system `ON DELETE REST
 | `type_client` values | fidèle / normal | UI: Entreprise / Grossiste / Détaillant |
 | Order ↔ invoice multiplicity (class diagram) | 1 — 1 | schema allows 1 — 0..* |
 
-These differences are documented, not "fixed": the schema published here is the one
-the Java code actually runs against.
+| Delete rules | not specified | original export: all `CASCADE`; this repository: `RESTRICT` (see *Delete safety*) |
+
+The type and column differences are documented, not "fixed": the schema published here is
+the one the Java code actually runs against.

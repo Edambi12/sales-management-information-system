@@ -20,7 +20,7 @@
 |---|---|
 | **Type** | Desktop application (not a website, so there is no live demo) |
 | **Stack** | Java · Swing · JDBC · MySQL/MariaDB · SQL · UML · Eclipse IDE |
-| **Size** | 9 Java classes, about 7,300 lines · 10 relational tables · 8 foreign keys · 24 UML diagrams |
+| **Size** | 14 Java classes, about 7,700 lines · 10 relational tables · 8 foreign keys · 24 UML diagrams |
 | **Context** | Academic internship project, Bachelor in Business Computing (Business Intelligence), ISGIS, University of Sfax |
 | **Author** | Edam Ketata |
 
@@ -91,7 +91,7 @@ Every item below was checked in the Java source and exercised by the [integratio
 |---|---|---|
 | 🔐 **Authentication** | `LoginSoktrapa`, `MenuPrincipal` | Administrator login (parameterised query, PBKDF2 password hash), main menu with five modules |
 | 👥 **Customers** | `GestionClients` | Create, view, update, delete, multi-criteria search · customer type (Entreprise / Grossiste / Détaillant) · payment terms (Comptant, 30/60/90 jours, Fin de mois) · credit limit |
-| 🛒 **Orders** | `GestionCommandes` | Create, update and delete orders · customer selection · order date and expected delivery date · status (En attente / Confirmée / Annulée) · discount % · **order lines** (add, modify, delete) · **automatic stock control** (blocks the line if stock is insufficient, warns when stock runs low) · stock decreased or restored **in a single transaction** |
+| 🛒 **Orders** | `GestionCommandes` | Create, update and delete orders · customer selection · order date and expected delivery date · status (En attente / Confirmée / Annulée) · discount % · **order lines** (add, modify, delete) · **automatic stock control** (blocks the line if stock is insufficient, warns when stock runs low) · stock reserved, adjusted or restored **in the same transaction** as the line or order change · invoiced orders protected from deletion |
 | 📦 **Inventory** | `GestionStock` | View depots, lots, locations and quantities · product-to-depot mapping · **inventory** (physical count, surplus or shortage detection, adjustment) · **stock exit** · availability check |
 | 💰 **Invoices & payments** | `GestionPaiement` | Invoice generation from confirmed, not-yet-invoiced orders · detailed invoice (lines, gross amount, discount, VAT 7%, **NET TTC**) · record, update, delete and search payments · payment method and status · **remaining balance** |
 | ↩️ **Returns & complaints** | `Reclamation` | Return requests linked to an invoice · reason and product condition · update, delete, view, search |
@@ -111,7 +111,7 @@ Every item below was checked in the Java source and exercised by the [integratio
 
 ## 7. Application architecture
 
-The application has two tiers: Swing windows talk to MySQL directly through JDBC. Each module is a `JFrame` that holds its view, its event handlers and its SQL. Connection settings and password hashing live in two shared helper classes.
+The application has two tiers: Swing windows talk to MySQL directly through JDBC. Most modules are a `JFrame` that holds its view, its event handlers and its SQL. The order-line and stock rules are the exception: they live in a small **Model → DAO → Service** layer, the first step of a gradual refactoring. Connection settings and password hashing live in two shared helper classes.
 
 ```mermaid
 flowchart LR
@@ -121,7 +121,9 @@ flowchart LR
     M --> O[GestionCommandes]
     M --> P[GestionPaiement]
     M --> R[Reclamation]
-    L & C & S & O & P & R --> CFG[DatabaseConfig]
+    O --> SV[CommandeService]
+    SV --> DAO[StockDao · LigneCommandeDao]
+    L & C & S & O & P & R & SV --> CFG[DatabaseConfig]
     L --> H[PasswordHasher]
     CFG -->|JDBC| DB[(MySQL / MariaDB<br/>soktrapa)]
 ```
@@ -141,9 +143,13 @@ sales-management-information-system/
 │   ├── GestionPaiement.java     # invoices & payments
 │   ├── Reclamation.java         # returns & complaints
 │   ├── DatabaseConfig.java      # JDBC settings (no credentials in code)
-│   └── PasswordHasher.java      # PBKDF2 hashing + CLI
+│   ├── PasswordHasher.java      # PBKDF2 hashing + CLI
+│   ├── service/CommandeService.java   # order-line / stock rules, transactions
+│   ├── dao/                     # StockDao, LigneCommandeDao (SQL only)
+│   └── model/                   # ControleStock, SuppressionCommande
 ├── database/
 │   ├── schema.sql               # 10 tables, keys, foreign keys
+│   ├── migrations/              # upgrade script for existing databases
 │   ├── sample_data.sql          # fictional demo dataset
 │   └── README.md
 ├── config/database.properties.example
@@ -153,7 +159,8 @@ sales-management-information-system/
 │   └── run-integration-tests.sh
 └── docs/
     ├── project-report.pdf       # internship report (customer data redacted)
-    ├── architecture.md · requirements.md · database-design.md · security-audit.md
+    ├── architecture.md · requirements.md · database-design.md
+    ├── security-audit.md · improvement-audit.md
     ├── uml/                     # 24 diagrams extracted from the report
     └── screenshots/             # 7 application screenshots
 ```
@@ -308,6 +315,7 @@ These are real screenshots taken from the internship report. Customer personal d
 * [`docs/database-design.md`](docs/database-design.md): every table and column, keys, relationships, cascade behaviour, the business rules implemented in Java, and the differences between the report's data dictionary and the real schema.
 * [`database/README.md`](database/README.md): installation, least-privilege account, demo login, and how the sample data was built.
 * [`docs/requirements.md`](docs/requirements.md): each requirement from the report with its implementation status.
+* [`docs/improvement-audit.md`](docs/improvement-audit.md): order/stock consistency, delete safety and architecture, with completed fixes separated from recommendations.
 
 ## 17. Quality, tests and security
 
@@ -317,7 +325,10 @@ These are real screenshots taken from the internship report. Customer personal d
 | Schema import (`schema.sql` + `sample_data.sql`) on MariaDB 10.11 | ✅ Imports cleanly. Columns, types and keys are identical to the original export |
 | Foreign keys and data consistency | ✅ All 8 FKs present. Every invoice equals the recomputed NET TTC |
 | Application start-up (`java -jar`, headless X server) | ✅ Login window starts with no exception |
-| **Integration test**: real Swing frames + JDBC + MariaDB, least-privilege DB account | ✅ **38 / 38 checks pass**, and the test can be re-run |
+| **Integration test**: real Swing frames + JDBC + MariaDB, least-privilege DB account | ✅ **59 / 59 checks pass**, and the test can be re-run |
+| Regression checks R1–R12 (order deletion, line changes, rollbacks, stale screens, several depots, delete protection) | ✅ 21 checks pass on the current code; 15 checks fail when run against the previous order window and schema |
+| Migration script on a database created with the previous schema | ✅ Same constraint rules as a fresh install, no row changed |
+| Concurrent sessions | ⚠️ Row locking is in place but there is no multi-session test |
 | Login workflow (valid, wrong password, unknown user, injection-style input, legacy plain-text row) | ✅ Tested |
 | CRUD workflows for all five modules, stock control, invoice computation | ✅ Tested (see the test source) |
 | Visual check of the screens on Windows / Eclipse | ⚠️ Not done in this environment. The screenshots come from the author's report |
@@ -337,26 +348,33 @@ The integration test is [`tests/integration/SwingIntegrationTest.java`](tests/in
 * Reviewed every query for SQL injection: all user input goes through `PreparedStatement`.
 * Fixed a type bug in the stock module (`lot_depot` was read as an integer) and the absolute Windows path to the JDBC driver.
 
+**Consistency and delete-safety work** (full report: [`docs/improvement-audit.md`](docs/improvement-audit.md)):
+
+* Deleting an order now restores the stock of all its lines. Line changes read the real quantity from the database, lock the rows, and roll back completely on any refusal or error.
+* A product stored in several depots no longer has its quantity moved in every depot.
+* Six foreign keys changed from `ON DELETE CASCADE` to `ON DELETE RESTRICT`: customers with orders, invoiced orders, and invoices with payments or returns can no longer be deleted. A migration script upgrades existing databases.
+* The order-line and stock rules moved out of the Swing window into a DAO/service layer.
+
 ## 18. Project limitations
 
 This is an academic project and is not production software:
 
 * **One administrator account**, with no roles. The report's actors (seller, treasurer, storekeeper) are not separated, and each module can also be started from its own `main()`.
-* **UI, business logic and SQL live in the same Swing classes**, and there are no unit tests (only the integration test).
-* All foreign keys are `ON DELETE CASCADE`, so deleting a customer also deletes their orders, invoices, payments and returns.
-* Deleting a whole order does not restore its stock (deleting a single order line does).
-* There is no stock movement history and no FIFO/LIFO lot management. Returns do not update stock.
+* **UI, business logic and SQL still live in the same Swing classes** for every module except the order-line and stock rules, and there are no unit tests (only the integration test).
+* A customer with orders cannot be deleted, and there is no archive (soft-delete) function yet.
+* Cancelling an order (status `Annulée`) does not release its stock, and the lines of an invoiced order can still be edited.
+* There is no stock movement history and no FIFO/LIFO lot management. The depot that served an order line is not recorded. Returns do not update stock.
 * There is no screen to manage products or depots, and invoices cannot be edited, printed or exported to PDF.
 * IDs are typed by hand although the columns are `AUTO_INCREMENT`.
 * The VAT rate (7%) and the stock alert thresholds are hardcoded. The interface is in French only.
 
 ## 19. Future improvements
 
-* Add a **DAO / service layer** with domain classes that match the class diagram, plus JUnit tests for the business rules.
+* Extend the **DAO / service layer** to the other modules (order header, invoices and payments, customers, returns), with JUnit tests for the business rules. The step-by-step path is in [`docs/architecture.md`](docs/architecture.md).
 * Add **role-based access** (seller, treasurer, storekeeper) and account lockout.
 * Add a **stock movement journal**, update stock on returns, and manage lots (FIFO).
 * Add product and depot screens, invoice editing, and **PDF invoice and receipt** generation.
-* Use `ON DELETE RESTRICT` with soft delete, and add `DECIMAL` types for money columns.
+* Add **soft delete** (archiving) for customers, release stock when an order is cancelled, lock the lines of invoiced orders, and use `DECIMAL` types for money columns.
 * Add reporting and **Business Intelligence** dashboards (sales by customer, product and period), as the report suggests, plus notifications.
 * Package the app as a native installer (`jpackage`).
 

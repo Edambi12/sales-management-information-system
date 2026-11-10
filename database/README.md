@@ -6,7 +6,8 @@ the report): [`docs/database-design.md`](../docs/database-design.md).
 
 | File | Content |
 |------|---------|
-| [`schema.sql`](schema.sql) | Database + 10 tables, primary keys, indexes, 8 foreign keys. Non-destructive (no `DROP`). |
+| [`schema.sql`](schema.sql) | Database + 10 tables, primary keys, indexes, 8 foreign keys (6 `ON DELETE RESTRICT`). Non-destructive (no `DROP`). |
+| [`migrations/001_restrict_deletes.sql`](migrations/001_restrict_deletes.sql) | Upgrade for a database created **before** the delete rules changed from `CASCADE` to `RESTRICT`. Changes constraints only. |
 | [`sample_data.sql`](sample_data.sql) | **Fictional** demonstration dataset (4 customers, 8 products, 8 depots, 9 orders, 18 order lines, 5 invoices, 5 payments, 2 returns, 1 demo administrator). |
 
 ## 1. Initialise the database
@@ -21,6 +22,17 @@ mysql -u root -p soktrapa < database/sample_data.sql
 
 With XAMPP on Windows you can also use **phpMyAdmin → Import** and import the two
 files in that order.
+
+### Upgrading an existing database
+
+If your database was created from the original export or from an earlier version of
+`schema.sql`, apply the migration once, with an administrative account (it needs `ALTER`):
+
+```bash
+mysql -u root -p soktrapa < database/migrations/001_restrict_deletes.sql
+```
+
+### Resetting the demo database
 
 To reset a local demo database:
 
@@ -37,6 +49,7 @@ needs data manipulation rights, so create a dedicated account and put it in
 `config/database.properties`:
 
 ```sql
+-- run as an administrative account
 CREATE USER 'soktrapa_app'@'localhost' IDENTIFIED BY 'choose-a-strong-password';
 GRANT SELECT, INSERT, UPDATE, DELETE ON soktrapa.* TO 'soktrapa_app'@'localhost';
 FLUSH PRIVILEGES;
@@ -83,4 +96,7 @@ On MariaDB 10.11 (the original export came from MariaDB 10.4 / XAMPP):
 * `schema.sql` + `sample_data.sql` import without errors.
 * Column names, types, nullability and keys are **identical** to the original export
   (compared through `information_schema.columns` and `information_schema.key_column_usage`).
+  The only intended difference is the `ON DELETE` rule of six foreign keys.
 * All 8 foreign keys are present; every invoice amount equals the recomputed NET TTC.
+* The migration script, applied to a database created with the previous schema, gives the
+  same constraint rules as a fresh install and leaves every row in place.
