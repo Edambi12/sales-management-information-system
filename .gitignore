@@ -1,0 +1,30 @@
+# --- Build output (Eclipse / Maven)
+bin/
+target/
+*.class
+
+# --- Local configuration with real credentials (use config/database.properties.example)
+config/database.properties
+*.env
+.env
+
+# --- Third-party JARs are downloaded locally (see lib/README.md)
+lib/*.jar
+
+# --- Local database dumps (may contain personal data or credentials)
+*.sql.bak
+dumps/
+database/local/
+
+# --- IDE / OS files
+.metadata/
+.recommenders/
+*.launch
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*~

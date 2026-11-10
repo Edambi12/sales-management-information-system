@@ -1,0 +1,15 @@
+# SOKTRAPA - JDBC configuration
+#
+# 1. Copy this file to config/database.properties (that file is ignored by Git).
+# 2. Replace the placeholders with your local values.
+#
+# Values can also be provided with environment variables, which take precedence:
+#   SOKTRAPA_DB_URL, SOKTRAPA_DB_USER, SOKTRAPA_DB_PASSWORD
+# or with a custom file:  java -Dsoktrapa.config=/path/to/file.properties ...
+#
+# Recommended: a dedicated least-privilege account (see database/README.md),
+# not the MySQL root account.
+
+db.url=jdbc:mysql://localhost:3306/soktrapa
+db.user=YOUR_DB_USER
+db.password=YOUR_DB_PASSWORD
