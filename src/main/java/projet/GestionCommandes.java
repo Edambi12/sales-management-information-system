@@ -10,6 +10,10 @@ import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
 
+import projet.model.ControleStock;
+import projet.model.SuppressionCommande;
+import projet.service.CommandeService;
+
 public class GestionCommandes extends JFrame {
 
     private Color VERT_FONCE = new Color(27, 94, 32);
@@ -45,6 +49,9 @@ public class GestionCommandes extends JFrame {
     private JLabel lblTitreLignes;
 
     private SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+
+    // Order-line / stock rules live in the service layer (no SQL for them in this window).
+    private final CommandeService commandeService = new CommandeService();
 
     // JDBC settings are loaded from config/database.properties (see DatabaseConfig).
     public GestionCommandes() {
@@ -1018,139 +1025,93 @@ public class GestionCommandes extends JFrame {
         if (id.isEmpty()) {
             showMsg("⚠️ Sélectionnez une commande!", "Attention", JOptionPane.WARNING_MESSAGE); return;
         }
+        int idCmd;
+        try {
+            idCmd = Integer.parseInt(id);
+        } catch (NumberFormatException e) {
+            showMsg("⚠️ ID invalide!", "Attention", JOptionPane.WARNING_MESSAGE); return;
+        }
         int confirm = JOptionPane.showConfirmDialog(this,
             "🗑️ Supprimer commande #" + id + "?", "Confirmation", JOptionPane.YES_NO_OPTION);
         if (confirm != JOptionPane.YES_OPTION) return;
 
-        Connection c = null;
         try {
-            c = getCon(); c.setAutoCommit(false);
-            int idCmd = Integer.parseInt(id);
+            // Lines, stock restoration and order deletion run in one transaction (CommandeService).
+            SuppressionCommande resultat = commandeService.supprimerCommande(idCmd);
+            if (!resultat.estSupprimee()) return;
 
-            PreparedStatement psL = c.prepareStatement("DELETE FROM ligne_commande WHERE id_commande = ?");
-            psL.setInt(1, idCmd); psL.executeUpdate();
-
-            PreparedStatement psC = c.prepareStatement("DELETE FROM commande WHERE id_commande = ?");
-            psC.setInt(1, idCmd);
-            if (psC.executeUpdate() > 0) {
-                c.commit();
-                showMsg("✅ Commande supprimée!", "Succès", JOptionPane.INFORMATION_MESSAGE);
-                loadDataCommandes(); modelLigneCommande.setRowCount(0);
-                lblTitreLignes.setText("📝 Lignes de Commande");
-                lblTitreLignes.setForeground(BLEU);
-                viderChamps();
-            } else { c.rollback(); }
+            String message = "✅ Commande supprimée!";
+            if (resultat.getNbLignes() > 0) {
+                message += "\nStock restauré: +" + resultat.getQteRestauree() + " kg";
+            }
+            showMsg(message, "Succès", JOptionPane.INFORMATION_MESSAGE);
+            loadDataCommandes(); modelLigneCommande.setRowCount(0);
+            lblTitreLignes.setText("📝 Lignes de Commande");
+            lblTitreLignes.setForeground(BLEU);
+            viderChamps();
         } catch (SQLException e) {
-            try { if (c != null) c.rollback(); } catch (SQLException ex) {}
-            showError(e);
-        } finally {
-            try { if (c != null) { c.setAutoCommit(true); c.close(); } } catch (SQLException ex) {}
+            if (CommandeService.estReferencee(e)) {
+                showMsg("❌ Impossible: cette commande est liée à une facture!\n" +
+                        "Aucune modification n'a été effectuée (lignes et stock inchangés).",
+                        "Erreur", JOptionPane.ERROR_MESSAGE);
+            } else showError(e);
         }
     }
 
-    
-    private String controlerStock(Connection con, int idProduit, int qteCommande) throws SQLException {
-
-        String sqlStock = "SELECT d.id_depot, d.qte_disponible, d.lieu_depot " +
-                          "FROM stocker s " +
-                          "JOIN `depot` d ON s.id_depot = d.id_depot " +
-                          "WHERE s.id_produit = ? " +
-                          "ORDER BY d.qte_disponible DESC " +
-                          "LIMIT 1";
-
-        PreparedStatement ps = con.prepareStatement(sqlStock);
-        ps.setInt(1, idProduit);
-        ResultSet rs = ps.executeQuery();
-
-        if (!rs.next()) return "NO_DEPOT";
-
-        int    idDepot       = rs.getInt("id_depot");
-        int    qteDispo      = rs.getInt("qte_disponible");
-        String lieuDepot     = rs.getString("lieu_depot");
-        int    stockRestant  = qteDispo - qteCommande;
-
-        
-        if (qteCommande > qteDispo) {
-            JOptionPane.showMessageDialog(this,
-                "❌ STOCK INSUFFISANT!\n\n" +
-                "══════════════════════════════════════\n" +
-                "   Produit ID : " + idProduit + "\n" +
-                "   Dépôt      : " + lieuDepot + " (#" + idDepot + ")\n" +
-                "══════════════════════════════════════\n" +
-                "   Stock disponible : " + qteDispo + " kg\n" +
-                "   Quantité demandée: " + qteCommande + " kg\n" +
-                "   Manque           : " + (qteCommande - qteDispo) + " kg\n" +
-                "══════════════════════════════════════\n\n" +
-                "⛔ Impossible de passer cette commande!",
-                "Stock Insuffisant", JOptionPane.ERROR_MESSAGE);
-            return "INSUFFISANT";
+    /**
+     * Displays the outcome of a stock control. Called after the transaction has ended,
+     * so no database lock is held while the dialog is open.
+     */
+    private void afficherControleStock(ControleStock ctl) {
+        switch (ctl.getStatut()) {
+            case INSUFFISANT:
+                JOptionPane.showMessageDialog(this,
+                    "❌ STOCK INSUFFISANT!\n\n" +
+                    "══════════════════════════════════════\n" +
+                    "   Produit ID : " + ctl.getIdProduit() + "\n" +
+                    "   Dépôt      : " + ctl.getLieuDepot() + " (#" + ctl.getIdDepot() + ")\n" +
+                    "══════════════════════════════════════\n" +
+                    "   Stock disponible : " + ctl.getQteDisponible() + " kg\n" +
+                    "   Quantité demandée: " + ctl.getQteDemandee() + " kg\n" +
+                    "   Manque           : " + ctl.getManque() + " kg\n" +
+                    "══════════════════════════════════════\n\n" +
+                    "⛔ Impossible de passer cette commande!",
+                    "Stock Insuffisant", JOptionPane.ERROR_MESSAGE);
+                break;
+            case ALERTE_COMMANDER:
+                JOptionPane.showMessageDialog(this,
+                    "⚠️ STOCK ALERTE — Il faut passer une commande!\n\n" +
+                    "══════════════════════════════════════\n" +
+                    "   Produit ID : " + ctl.getIdProduit() + "\n" +
+                    "   Dépôt      : " + ctl.getLieuDepot() + " (#" + ctl.getIdDepot() + ")\n" +
+                    "══════════════════════════════════════\n" +
+                    "   Stock disponible  : " + ctl.getQteDisponible() + " kg\n" +
+                    "   Quantité demandée : " + ctl.getQteDemandee() + " kg\n" +
+                    "   Stock restant     : " + ctl.getStockRestant() + " kg\n" +
+                    "══════════════════════════════════════\n\n" +
+                    "📦 Le stock est très bas!\n" +
+                    "Veuillez passer une commande d'approvisionnement.\n\n" +
+                    "✅ La ligne sera quand même enregistrée.",
+                    "Stock Alerte — Commander", JOptionPane.WARNING_MESSAGE);
+                break;
+            case ALERTE_EXPLOITER:
+                JOptionPane.showMessageDialog(this,
+                    "ℹ️ STOCK ALERTE — Début d'exploitation!\n\n" +
+                    "══════════════════════════════════════\n" +
+                    "   Produit ID : " + ctl.getIdProduit() + "\n" +
+                    "   Dépôt      : " + ctl.getLieuDepot() + " (#" + ctl.getIdDepot() + ")\n" +
+                    "══════════════════════════════════════\n" +
+                    "   Stock disponible  : " + ctl.getQteDisponible() + " kg\n" +
+                    "   Quantité demandée : " + ctl.getQteDemandee() + " kg\n" +
+                    "   Stock restant     : " + ctl.getStockRestant() + " kg\n" +
+                    "══════════════════════════════════════\n\n" +
+                    "📊 Le stock a commencé à être exploité.\n\n" +
+                    "✅ La ligne sera enregistrée.",
+                    "Stock — Début Exploitation", JOptionPane.INFORMATION_MESSAGE);
+                break;
+            default:
+                break;
         }
-
-        
-        if (stockRestant <= 1000) {
-            JOptionPane.showMessageDialog(this,
-                "⚠️ STOCK ALERTE — Il faut passer une commande!\n\n" +
-                "══════════════════════════════════════\n" +
-                "   Produit ID : " + idProduit + "\n" +
-                "   Dépôt      : " + lieuDepot + " (#" + idDepot + ")\n" +
-                "══════════════════════════════════════\n" +
-                "   Stock disponible  : " + qteDispo + " kg\n" +
-                "   Quantité demandée : " + qteCommande + " kg\n" +
-                "   Stock restant     : " + stockRestant + " kg\n" +
-                "══════════════════════════════════════\n\n" +
-                "📦 Le stock est très bas!\n" +
-                "Veuillez passer une commande d'approvisionnement.\n\n" +
-                "✅ La ligne sera quand même enregistrée.",
-                "Stock Alerte — Commander", JOptionPane.WARNING_MESSAGE);
-            return "ALERT_COMMANDER";
-        }
-
-        
-        if (qteCommande < qteDispo && stockRestant < (qteDispo * 0.5)) {
-            JOptionPane.showMessageDialog(this,
-                "ℹ️ STOCK ALERTE — Début d'exploitation!\n\n" +
-                "══════════════════════════════════════\n" +
-                "   Produit ID : " + idProduit + "\n" +
-                "   Dépôt      : " + lieuDepot + " (#" + idDepot + ")\n" +
-                "══════════════════════════════════════\n" +
-                "   Stock disponible  : " + qteDispo + " kg\n" +
-                "   Quantité demandée : " + qteCommande + " kg\n" +
-                "   Stock restant     : " + stockRestant + " kg\n" +
-                "══════════════════════════════════════\n\n" +
-                "📊 Le stock a commencé à être exploité.\n\n" +
-                "✅ La ligne sera enregistrée.",
-                "Stock — Début Exploitation", JOptionPane.INFORMATION_MESSAGE);
-            return "ALERT_EXPLOITER";
-        }
-
-        return "OK";
-    }
-
-    
-    private void diminuerStock(Connection con, int idProduit, int qteCommande) throws SQLException {
-        String sql = "UPDATE `depot` d " +
-                     "JOIN stocker s ON d.id_depot = s.id_depot " +
-                     "SET d.qte_disponible = d.qte_disponible - ? " +
-                     "WHERE s.id_produit = ? " +
-                     "AND d.qte_disponible >= ?";
-
-        PreparedStatement ps = con.prepareStatement(sql);
-        ps.setInt(1, qteCommande);
-        ps.setInt(2, idProduit);
-        ps.setInt(3, qteCommande);
-        ps.executeUpdate();
-    }
-
-    private void restaurerStock(Connection con, int idProduit, int qteCommande) throws SQLException {
-        String sql = "UPDATE `depot` d " +
-                     "JOIN stocker s ON d.id_depot = s.id_depot " +
-                     "SET d.qte_disponible = d.qte_disponible + ? " +
-                     "WHERE s.id_produit = ?";
-
-        PreparedStatement ps = con.prepareStatement(sql);
-        ps.setInt(1, qteCommande);
-        ps.setInt(2, idProduit);
-        ps.executeUpdate();
     }
 
    
@@ -1176,36 +1137,23 @@ public class GestionCommandes extends JFrame {
             showMsg("⚠️ Quantité invalide!", "Erreur", JOptionPane.WARNING_MESSAGE); return;
         }
 
-        Connection c = null;
+        int idCmd;
         try {
-            c = getCon();
-            c.setAutoCommit(false);
+            idCmd = Integer.parseInt(txtIdCommande.getText().trim());
+        } catch (NumberFormatException e) {
+            showMsg("⚠️ ID invalide!", "Attention", JOptionPane.WARNING_MESSAGE); return;
+        }
 
-            
-            String resultat = controlerStock(c, idProduit, qteCommande);
+        try {
+            // Stock control + line insert + stock decrease: one transaction (CommandeService).
+            ControleStock resultat = commandeService.ajouterLigne(idCmd, idProduit, qteCommande);
+            afficherControleStock(resultat);
 
-            if (resultat.equals("INSUFFISANT")) {
-                c.rollback(); return;
-            }
-
-            if (resultat.equals("NO_DEPOT")) {
+            if (resultat.getStatut() == ControleStock.Statut.AUCUN_DEPOT) {
                 showMsg("⚠️ Aucun dépôt trouvé pour ce produit!\nVérifiez la table Stocker.",
                         "Attention", JOptionPane.WARNING_MESSAGE);
-                c.rollback(); return;
             }
-
-            
-            int idCmd = Integer.parseInt(txtIdCommande.getText().trim());
-            PreparedStatement ps = c.prepareStatement(
-                "INSERT INTO ligne_commande (id_commande, id_produit, qte_commande) VALUES (?, ?, ?)");
-            ps.setInt(1, idCmd);
-            ps.setInt(2, idProduit);
-            ps.setInt(3, qteCommande);
-            ps.executeUpdate();
-
-            diminuerStock(c, idProduit, qteCommande);
-
-            c.commit();
+            if (!resultat.estAccepte()) return;
 
             showMsg("✅ Ligne ajoutée!\nStock mis à jour: -" + qteCommande + " kg",
                     "Succès", JOptionPane.INFORMATION_MESSAGE);
@@ -1214,14 +1162,11 @@ public class GestionCommandes extends JFrame {
             txtQteCommande.setText("1");
 
         } catch (SQLException e) {
-            try { if (c != null) c.rollback(); } catch (SQLException ex) {}
             if (e.getMessage().contains("Duplicate"))
                 showMsg("❌ Ligne existe déjà!", "Erreur", JOptionPane.ERROR_MESSAGE);
             else if (e.getMessage().contains("foreign key"))
                 showMsg("❌ Commande/Produit inexistant!", "Erreur", JOptionPane.ERROR_MESSAGE);
             else showError(e);
-        } finally {
-            try { if (c != null) { c.setAutoCommit(true); c.close(); } } catch (SQLException ex) {}
         }
     }
 
@@ -1234,7 +1179,6 @@ public class GestionCommandes extends JFrame {
 
         int idCmd     = Integer.parseInt(modelLigneCommande.getValueAt(row, 0).toString());
         int idProdOld = Integer.parseInt(modelLigneCommande.getValueAt(row, 1).toString());
-        int oldQte    = Integer.parseInt(modelLigneCommande.getValueAt(row, 3).toString());
 
         Integer idProdNew = getIdProduitSelectionne();
         if (idProdNew == null) {
@@ -1254,65 +1198,24 @@ public class GestionCommandes extends JFrame {
             showMsg("⚠️ Quantité invalide!", "Erreur", JOptionPane.WARNING_MESSAGE); return;
         }
 
-        Connection c = null;
         try {
-            c = getCon();
-            c.setAutoCommit(false);
+            // The current quantity is re-read from the database inside the transaction:
+            // the value displayed in the table may be out of date.
+            ControleStock resultat = commandeService.modifierLigne(idCmd, idProdOld, idProdNew, newQte);
+            afficherControleStock(resultat);
 
-            if (idProdOld != idProdNew) {
-              
-                restaurerStock(c, idProdOld, oldQte);
-
-              
-                String resultat = controlerStock(c, idProdNew, newQte);
-                if (resultat.equals("INSUFFISANT")) { c.rollback(); return; }
-                if (resultat.equals("NO_DEPOT")) {
-                    showMsg("⚠️ Aucun dépôt pour ce nouveau produit!", "Attention", JOptionPane.WARNING_MESSAGE);
-                    c.rollback(); return;
-                }
-
-                
-                PreparedStatement psDel = c.prepareStatement(
-                    "DELETE FROM ligne_commande WHERE id_commande = ? AND id_produit = ?");
-                psDel.setInt(1, idCmd); psDel.setInt(2, idProdOld);
-                psDel.executeUpdate();
-
-                
-                PreparedStatement psIns = c.prepareStatement(
-                    "INSERT INTO ligne_commande (id_commande, id_produit, qte_commande) VALUES (?, ?, ?)");
-                psIns.setInt(1, idCmd); psIns.setInt(2, idProdNew); psIns.setInt(3, newQte);
-                psIns.executeUpdate();
-
-                
-                diminuerStock(c, idProdNew, newQte);
-
-            } else {
-                
-                int diffQte = newQte - oldQte;
-
-                if (diffQte > 0) {
-                    
-                    String resultat = controlerStock(c, idProdNew, diffQte);
-                    if (resultat.equals("INSUFFISANT")) { c.rollback(); return; }
-                    if (resultat.equals("NO_DEPOT")) {
-                        showMsg("⚠️ Aucun dépôt pour ce produit!", "Attention", JOptionPane.WARNING_MESSAGE);
-                        c.rollback(); return;
-                    }
-                    diminuerStock(c, idProdNew, diffQte);
-
-                } else if (diffQte < 0) {
-                    
-                    restaurerStock(c, idProdNew, Math.abs(diffQte));
-                }
-                
-
-                PreparedStatement psUpd = c.prepareStatement(
-                    "UPDATE ligne_commande SET qte_commande = ? WHERE id_commande = ? AND id_produit = ?");
-                psUpd.setInt(1, newQte); psUpd.setInt(2, idCmd); psUpd.setInt(3, idProdOld);
-                psUpd.executeUpdate();
+            if (resultat.getStatut() == ControleStock.Statut.AUCUN_DEPOT) {
+                showMsg(idProdOld != idProdNew ? "⚠️ Aucun dépôt pour ce nouveau produit!"
+                                               : "⚠️ Aucun dépôt pour ce produit!",
+                        "Attention", JOptionPane.WARNING_MESSAGE);
             }
+            if (resultat.getStatut() == ControleStock.Statut.LIGNE_INTROUVABLE) {
+                showMsg("⚠️ Cette ligne n'existe plus. La liste a été actualisée.",
+                        "Attention", JOptionPane.WARNING_MESSAGE);
+                loadLignesCommande(idCmd);
+            }
+            if (!resultat.estAccepte()) return;
 
-            c.commit();
             showMsg("✅ Ligne modifiée!\nStock mis à jour automatiquement.",
                     "Succès", JOptionPane.INFORMATION_MESSAGE);
             loadLignesCommande(idCmd);
@@ -1320,12 +1223,9 @@ public class GestionCommandes extends JFrame {
             txtQteCommande.setText("1");
 
         } catch (SQLException e) {
-            try { if (c != null) c.rollback(); } catch (SQLException ex) {}
             if (e.getMessage().contains("Duplicate"))
                 showMsg("❌ Cette ligne existe déjà!", "Erreur", JOptionPane.ERROR_MESSAGE);
             else showError(e);
-        } finally {
-            try { if (c != null) { c.setAutoCommit(true); c.close(); } } catch (SQLException ex) {}
         }
     }
 
@@ -1345,32 +1245,16 @@ public class GestionCommandes extends JFrame {
                 "Le stock sera restauré: +" + qte + " kg",
                 "Confirmation", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
 
-        Connection c = null;
         try {
-            c = getCon();
-            c.setAutoCommit(false);
-
-            PreparedStatement ps = c.prepareStatement(
-                "DELETE FROM ligne_commande WHERE id_commande = ? AND id_produit = ?");
-            ps.setInt(1, idCmd); ps.setInt(2, idProd);
-
-            if (ps.executeUpdate() > 0) {
-                
-                restaurerStock(c, idProd, qte);
-                c.commit();
-
-                showMsg("✅ Ligne supprimée!\nStock restauré: +" + qte + " kg",
+            // The restored quantity is the one stored in the database, not the displayed one.
+            int qteRestauree = commandeService.supprimerLigne(idCmd, idProd);
+            if (qteRestauree >= 0) {
+                showMsg("✅ Ligne supprimée!\nStock restauré: +" + qteRestauree + " kg",
                         "Succès", JOptionPane.INFORMATION_MESSAGE);
-                loadLignesCommande(idCmd);
-            } else {
-                c.rollback();
             }
-
+            loadLignesCommande(idCmd);
         } catch (SQLException e) {
-            try { if (c != null) c.rollback(); } catch (SQLException ex) {}
             showError(e);
-        } finally {
-            try { if (c != null) { c.setAutoCommit(true); c.close(); } } catch (SQLException ex) {}
         }
     }
 

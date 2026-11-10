@@ -836,12 +836,15 @@ public class GestionStock extends JFrame {
         }
 
         try (Connection c = getCon()) {
+            // Read and update in one transaction; the depot row is locked (FOR UPDATE)
+            // so a concurrent order cannot change the quantity in between.
+            c.setAutoCommit(false);
 
             int id = Integer.parseInt(txtIdDepot.getText().trim());
             int stockReel = Integer.parseInt(txtQteReelle.getText().trim());
 
             PreparedStatement ps = c.prepareStatement(
-                "SELECT qte_disponible, lot_depot, lieu_depot FROM depot WHERE id_depot = ?");
+                "SELECT qte_disponible, lot_depot, lieu_depot FROM depot WHERE id_depot = ? FOR UPDATE");
             ps.setInt(1, id);
             ResultSet rs = ps.executeQuery();
 
@@ -860,6 +863,7 @@ public class GestionStock extends JFrame {
                     update.setInt(1, stockReel);
                     update.setInt(2, id);
                     update.executeUpdate();
+                    c.commit();
 
                     updateStatus("[OK] Inventaire valide - Stock mis a jour");
 
@@ -939,6 +943,9 @@ public class GestionStock extends JFrame {
         }
 
         try (Connection c = getCon()) {
+            // Read and update in one transaction; the depot row is locked (FOR UPDATE)
+            // so a concurrent order cannot change the quantity in between.
+            c.setAutoCommit(false);
 
             int id = Integer.parseInt(txtIdDepot.getText().trim());
             int qteSortie = Integer.parseInt(txtSortie.getText().trim());
@@ -952,7 +959,7 @@ public class GestionStock extends JFrame {
             }
 
             PreparedStatement ps = c.prepareStatement(
-                "SELECT qte_disponible, lot_depot, lieu_depot FROM depot WHERE id_depot = ?");
+                "SELECT qte_disponible, lot_depot, lieu_depot FROM depot WHERE id_depot = ? FOR UPDATE");
             ps.setInt(1, id);
             ResultSet rs = ps.executeQuery();
 
@@ -968,6 +975,7 @@ public class GestionStock extends JFrame {
                     update.setInt(1, qteSortie);
                     update.setInt(2, id);
                     update.executeUpdate();
+                    c.commit();
 
                     int nouveauStock = stockDisponible - qteSortie;
 
